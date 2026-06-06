@@ -1,0 +1,15 @@
+{
+  "name": "tent-allocation-wall",
+  "version": "1.0.0",
+  "description": "应急帐篷调拨墙 - 物资仓库、安置点管理员、指挥部三类视角",
+  "main": "index.html",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node tests/automation-check.js",
+    "docker:build": "docker build -t tent-allocation-wall .",
+    "docker:run": "docker run -p 8080:80 tent-allocation-wall"
+  },
+  "keywords": ["emergency", "tent", "allocation"],
+  "author": "",
+  "license": "MIT"
+}
