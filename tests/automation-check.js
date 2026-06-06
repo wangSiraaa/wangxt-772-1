@@ -4,8 +4,9 @@ const path = require('path');
 const dataJs = fs.readFileSync(path.join(__dirname, '../js/data.js'), 'utf8');
 const storeJs = fs.readFileSync(path.join(__dirname, '../js/store.js'), 'utf8');
 
-eval(dataJs);
-eval(storeJs.replace('const store = new TentAllocationStore();', '').replace('store.recalculateAllGaps();', ''));
+const combined = dataJs + '\n' + storeJs.replace('const store = new TentAllocationStore();', '').replace('store.recalculateAllGaps();', '');
+const fn = new Function(combined + '; return TentAllocationStore;');
+const TentAllocationStore = fn();
 
 let passed = 0;
 let failed = 0;
@@ -37,7 +38,7 @@ function runTests() {
   
   if (inTransitAllocation) {
     const canReallocate = testStore.canReallocateAllocation(inTransitAllocation.id);
-    assert(canReallocate === false, `运输中分配 (${inTransitAllocation.id}) 的改派按钮应被禁用 (canReallocate=false)`);
+    assert(canReallocate === false, '运输中分配的改派按钮应被禁用 (canReallocate=false)');
     
     const reallocateResult = testStore.reallocateAllocation(inTransitAllocation.id, 'SH-003');
     assert(reallocateResult.success === false, '尝试改派运输中分配应返回失败');
@@ -52,7 +53,7 @@ function runTests() {
   const originalStatus = shippedBatch.status;
   shippedBatch.status = 'shipped';
   const canSplit = testStore.canSplitBatch(shippedBatch.id);
-  assert(canSplit === false, `已发运批次 (${shippedBatch.id}) 不可二次拆分 (canSplit=false)');
+  assert(canSplit === false, '已发运批次不可二次拆分 (canSplit=false)');
   
   const allocateResult = testStore.allocateTents(shippedBatch.id, 'SH-003', 10);
   assert(allocateResult.success === false, '从已发运批次分配应返回失败');
@@ -72,7 +73,7 @@ function runTests() {
     
     const capacityCheck = testStore.checkCapacityOverflow(shelterWithGap.id, { [spec.id]: qtyToCauseOverflow });
     assert(capacityCheck.canFit === false, '应检测到容量不足');
-    assert(capacityCheck.overflow > 0, `应计算出超出人数: ${capacityCheck.overflow}人`);
+    assert(capacityCheck.overflow > 0, '应计算出超出人数');
     assert(capacityCheck.suggestion !== null && capacityCheck.suggestion.length > 0, '应提供拆分建议方案');
     
     console.log(`  ℹ️  安置点: ${shelterWithGap.name}`);
@@ -112,9 +113,9 @@ function runTests() {
     console.log(`  ℹ️  分配后: 缺口=${afterGap}人, 可用库存=${afterAvailable}, 锁定库存=${afterLocked}`);
     
     const expectedGapReduction = spec.capacity * allocQty;
-    assert(afterGap <= beforeGap, `缺口数应减少 (之前: ${beforeGap}, 之后: ${afterGap})`);
-    assert(afterAvailable === beforeAvailable - allocQty, `可用库存应减少 ${allocQty} (之前: ${beforeAvailable}, 之后: ${afterAvailable})`);
-    assert(afterLocked === beforeLocked + allocQty, `锁定库存应增加 ${allocQty} (之前: ${beforeLocked}, 之后: ${afterLocked})`);
+    assert(afterGap <= beforeGap, '缺口数应减少');
+    assert(afterAvailable === beforeAvailable - allocQty, '可用库存应减少');
+    assert(afterLocked === beforeLocked + allocQty, '锁定库存应增加');
   }
   console.log('');
 
@@ -143,7 +144,7 @@ function runTests() {
         console.log(`  ℹ️  抢占成功: 抢占数量=${preemptResult.preemptedQty}, 影响安置点=${preemptResult.affectedShelters.length}个`);
         
         const afterLowerGap = testStore.getShelterGap(lowerPriorityShelter.id);
-        assert(afterLowerGap >= beforeLowerGap, `被抢占安置点缺口应增加 (之前: ${beforeLowerGap}, 之后: ${afterLowerGap})`);
+        assert(afterLowerGap >= beforeLowerGap, '被抢占安置点缺口应增加');
         
         const preemptedAlloc = testStore.allocations.find(a => a.id === lockedAllocForLower.id);
         assert(preemptedAlloc.status === 'preempted', '被抢占的分配状态应更新为preempted');
@@ -177,8 +178,8 @@ function runTests() {
     
     console.log(`  ℹ️  撤销后: 可用=${afterAvailable}, 锁定=${afterLocked}`);
     
-    assert(afterAvailable === beforeAvailable + lockedAllocation.qty, `可用库存应增加 ${lockedAllocation.qty}`);
-    assert(afterLocked === beforeLocked - lockedAllocation.qty, `锁定库存应减少 ${lockedAllocation.qty}`);
+    assert(afterAvailable === beforeAvailable + lockedAllocation.qty, '可用库存应增加');
+    assert(afterLocked === beforeLocked - lockedAllocation.qty, '锁定库存应减少');
   }
   console.log('');
 
@@ -207,7 +208,7 @@ function runTests() {
   console.log('');
 
   console.log('='.repeat(60));
-  console.log(`测试结果: 通过 ${passed} 项, 失败 ${failed} 项');
+  console.log(`测试结果: 通过 ${passed} 项, 失败 ${failed} 项`);
   console.log('='.repeat(60));
 
   if (failed > 0) {

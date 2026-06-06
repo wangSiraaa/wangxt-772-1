@@ -180,9 +180,12 @@ class TentAllocationStore {
     
     const capacityCheck = this.checkCapacityOverflow(shelterId, { [batch.specId]: qty });
     if (!capacityCheck.canFit) {
+      const spec = this.getSpec(batch.specId);
+      const currentCapacity = this.getShelterCapacityUsed(shelterId);
+      const addedCapacity = spec.capacity * qty;
       return {
         success: false,
-        error: `安置点容量不足，超出 ${capacityCheck.overflow} 人`,
+        error: `安置点「${shelter.name}」容量不足：当前帐篷可容纳 ${currentCapacity} 人，分配 ${qty} 顶 ${spec.name} 增加 ${addedCapacity} 人容量后，仍超出 ${capacityCheck.overflow} 人（需容纳 ${shelter.currentPopulation} 人）`,
         suggestions: capacityCheck.suggestion
       };
     }
@@ -321,9 +324,12 @@ class TentAllocationStore {
     
     const capacityCheck = this.checkCapacityOverflow(newShelterId, { [allocation.specId]: allocation.qty });
     if (!capacityCheck.canFit) {
+      const spec = this.getSpec(allocation.specId);
+      const currentCapacity = this.getShelterCapacityUsed(newShelterId);
+      const addedCapacity = spec.capacity * allocation.qty;
       return {
         success: false,
-        error: `目标安置点容量不足，超出 ${capacityCheck.overflow} 人`,
+        error: `安置点「${newShelter.name}」容量不足：当前帐篷可容纳 ${currentCapacity} 人，分配 ${allocation.qty} 顶 ${spec.name} 增加 ${addedCapacity} 人容量后，仍超出 ${capacityCheck.overflow} 人（需容纳 ${newShelter.currentPopulation} 人）`,
         suggestions: capacityCheck.suggestion
       };
     }
