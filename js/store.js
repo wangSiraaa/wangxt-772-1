@@ -466,6 +466,69 @@ class TentAllocationStore {
       allocByStatus
     };
   }
+
+  canMoveTents(shelterId, specId, qty) {
+    const shelter = this.getShelter(shelterId);
+    if (!shelter) return false;
+    const currentAssigned = shelter.assignedTents[specId] || 0;
+    return currentAssigned >= qty;
+  }
+
+  moveTents(fromShelterId, toShelterId, specId, qty) {
+    const fromShelter = this.getShelter(fromShelterId);
+    const toShelter = this.getShelter(toShelterId);
+    const spec = this.getSpec(specId);
+    
+    if (!fromShelter || !toShelter || !spec) {
+      return { success: false, error: '安置点或帐篷规格不存在' };
+    }
+    
+    if (fromShelterId === toShelterId) {
+      return { success: false, error: '源安置点和目标安置点不能相同' };
+    }
+    
+    const currentAssigned = fromShelter.assignedTents[specId] || 0;
+    if (currentAssigned < qty) {
+      return { success: false, error: `源安置点「${fromShelter.name}」${spec.name}数量不足，当前只有 ${currentAssigned} 顶` };
+    }
+    
+    const capacityCheck = this.checkCapacityOverflow(toShelterId, { [specId]: qty });
+    if (!capacityCheck.canFit) {
+      const currentCapacity = this.getShelterCapacityUsed(toShelterId);
+      const addedCapacity = spec.capacity * qty;
+      return {
+        success: false,
+        error: `安置点「${toShelter.name}」容量不足：当前帐篷可容纳 ${currentCapacity} 人，移入 ${qty} 顶 ${spec.name} 增加 ${addedCapacity} 人容量后，仍超出 ${capacityCheck.overflow} 人（需容纳 ${toShelter.currentPopulation} 人）`,
+        suggestions: capacityCheck.suggestion
+      };
+    }
+    
+    fromShelter.assignedTents[specId] = currentAssigned - qty;
+    toShelter.assignedTents[specId] = (toShelter.assignedTents[specId] || 0) + qty;
+    
+    const allocationId = 'ALLOC-' + String(this.allocations.length + 1).padStart(3, '0');
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    
+    this.allocations.push({
+      id: allocationId,
+      batchId: 'MOVE-' + fromShelterId + '-' + toShelterId,
+      shelterId: toShelterId,
+      fromShelterId: fromShelterId,
+      specId: specId,
+      qty: qty,
+      status: 'moved',
+      createTime: now,
+      shipTime: now,
+      transportNode: 'INTERNAL',
+      operator: this.getOperator(),
+      moveType: 'internal_adaptation'
+    });
+    
+    this.recalculateAllGaps();
+    this.notify();
+    
+    return { success: true, allocationId };
+  }
 }
 
 const store = new TentAllocationStore();

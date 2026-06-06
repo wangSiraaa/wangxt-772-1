@@ -171,10 +171,11 @@ function renderCommandView() {
             <button class="tab-btn" data-tab="locked">待发运</button>
             <button class="tab-btn" data-tab="in_transit">运输中</button>
             <button class="tab-btn" data-tab="delivered">已送达</button>
+            <button class="tab-btn" data-tab="moved">移动适配</button>
           </div>
         </div>
         <div class="panel-body" id="allocation-panel">
-          ${renderAllocationList(['locked', 'in_transit', 'shipped', 'delivered', 'cancelled', 'preempted'])}
+          ${renderAllocationList(['locked', 'in_transit', 'shipped', 'delivered', 'cancelled', 'preempted', 'moved'])}
         </div>
       </div>
       <div class="panel">
@@ -313,6 +314,7 @@ function renderShelterList(showActions = false) {
         <div class="allocation-actions">
           ${showActions ? `
             <button class="btn btn-primary btn-sm btn-request-allocate" data-shelter-id="${shelter.id}">申请调拨</button>
+            <button class="btn btn-info btn-sm btn-move-adapt" data-shelter-id="${shelter.id}">移动适配</button>
             <button class="btn btn-warning btn-sm btn-adjust-priority" data-shelter-id="${shelter.id}">调整优先级</button>
           ` : ''}
         </div>
@@ -334,7 +336,8 @@ function renderAllocationList(statuses = []) {
     'shipped': '已发运',
     'delivered': '已送达',
     'cancelled': '已撤销',
-    'preempted': '已被抢占'
+    'preempted': '已被抢占',
+    'moved': '已移动适配'
   };
   
   return filteredAllocs.map(alloc => {
@@ -359,7 +362,8 @@ function renderAllocationList(statuses = []) {
         </div>
         <div class="allocation-meta">
           创建: ${alloc.createTime} | 操作人: ${alloc.operator}
-          ${alloc.shipTime ? `| 发运: ${alloc.shipTime}` : ''}
+          ${alloc.fromShelterId ? `| 从: ${store.getShelter(alloc.fromShelterId)?.name || alloc.fromShelterId}` : ''}
+          ${alloc.shipTime && !alloc.moveType ? `| 发运: ${alloc.shipTime}` : ''}
           ${alloc.deliveryTime ? `| 送达: ${alloc.deliveryTime}` : ''}
         </div>
         <div class="allocation-actions">
@@ -389,6 +393,12 @@ function attachEventListeners() {
   document.querySelectorAll('.btn-request-allocate').forEach(btn => {
     btn.addEventListener('click', (e) => {
       openRequestModal(e.target.dataset.shelterId);
+    });
+  });
+  
+  document.querySelectorAll('.btn-move-adapt').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      openMoveAdaptModal(e.target.dataset.shelterId);
     });
   });
   
@@ -453,10 +463,11 @@ function attachEventListeners() {
       const panel = document.getElementById('allocation-panel');
       if (panel) {
         const statusMap = {
-          'all': ['locked', 'in_transit', 'shipped', 'delivered', 'cancelled', 'preempted'],
+          'all': ['locked', 'in_transit', 'shipped', 'delivered', 'cancelled', 'preempted', 'moved'],
           'locked': ['locked'],
           'in_transit': ['in_transit'],
-          'delivered': ['delivered']
+          'delivered': ['delivered'],
+          'moved': ['moved']
         };
         panel.innerHTML = renderAllocationList(statusMap[tab] || statusMap['all']);
         attachAllocationPanelListeners();
@@ -743,6 +754,144 @@ function openRequestModal(shelterId) {
       showToast(result.error, 'error');
     }
   });
+}
+
+function openMoveAdaptModal(fromShelterId) {
+  const fromShelter = store.getShelter(fromShelterId);
+  const specs = currentState.specs.filter(s => (fromShelter?.assignedTents[s.id] || 0) > 0);
+  const toShelters = currentState.shelters.filter(s => s.id !== fromShelterId);
+  
+  if (specs.length === 0) {
+    showToast('该安置点没有可移动的帐篷', 'warning');
+    return;
+  }
+  
+  const modalHtml = `
+    <div class="modal-overlay" id="move-adapt-modal" data-from-shelter-id="${fromShelterId}">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>移动适配 - 从 ${fromShelter?.name} 调出</h3>
+          <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>选择帐篷规格</label>
+            <select id="move-spec-select">
+              ${specs.map(s => `
+                <option value="${s.id}">
+                  ${s.name} (可移动: ${fromShelter.assignedTents[s.id]}顶, 单顶容纳: ${s.capacity}人)
+                </option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>目标安置点</label>
+            <select id="move-to-shelter-select">
+              ${toShelters.map(s => `
+                <option value="${s.id}">${s.name} (缺口: ${store.getShelterGap(s.id)}人)</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>移动数量</label>
+            <input type="number" id="move-qty" min="1" value="1">
+          </div>
+          <div id="move-preview"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+          <button class="btn btn-info" id="btn-confirm-move">确认移动</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('modal-container').innerHTML = modalHtml;
+  
+  document.getElementById('move-spec-select').addEventListener('change', updateMovePreview);
+  document.getElementById('move-to-shelter-select').addEventListener('change', updateMovePreview);
+  document.getElementById('move-qty').addEventListener('input', updateMovePreview);
+  
+  document.getElementById('btn-confirm-move').addEventListener('click', handleMoveAdapt);
+  
+  updateMovePreview();
+  
+  function updateMovePreview() {
+    const specId = document.getElementById('move-spec-select').value;
+    const toShelterId = document.getElementById('move-to-shelter-select').value;
+    const qty = parseInt(document.getElementById('move-qty').value) || 0;
+    
+    const previewDiv = document.getElementById('move-preview');
+    const spec = store.getSpec(specId);
+    const toShelter = store.getShelter(toShelterId);
+    
+    if (!spec || !toShelter || qty <= 0) {
+      previewDiv.innerHTML = '';
+      return;
+    }
+    
+    const maxQty = fromShelter.assignedTents[specId] || 0;
+    if (qty > maxQty) {
+      previewDiv.innerHTML = `
+        <div class="alert alert-error">
+          <strong>⚠️ 数量超限!</strong> 源安置点最多可移动 ${maxQty} 顶
+        </div>
+      `;
+      return;
+    }
+    
+    const capacityCheck = store.checkCapacityOverflow(toShelterId, { [specId]: qty });
+    const newToGap = store.calculateShelterGapWithNewAllocation(toShelterId, { [specId]: qty });
+    
+    let previewHtml = `
+      <div class="alert alert-info">
+        <strong>移动预览:</strong><br>
+        帐篷: ${spec.name} × ${qty} 顶 (可容纳 ${spec.capacity * qty} 人)<br>
+        从: ${fromShelter.name} → 到: ${toShelter.name}<br>
+        目标安置点分配后缺口: ${newToGap.toLocaleString()} 人
+      </div>
+    `;
+    
+    if (!capacityCheck.canFit) {
+      previewHtml += `
+        <div class="alert alert-error">
+          <strong>⚠️ 容量不足!</strong> 超出 ${capacityCheck.overflow} 人
+          <ul class="suggestion-list">
+            ${capacityCheck.suggestion?.map(s => `<li>${s.message}</li>`).join('') || ''}
+          </ul>
+        </div>
+      `;
+    }
+    
+    previewDiv.innerHTML = previewHtml;
+  }
+}
+
+function handleMoveAdapt() {
+  const modal = document.getElementById('move-adapt-modal');
+  const fromShelterId = modal?.dataset.fromShelterId;
+  
+  if (!fromShelterId) {
+    showToast('无法确定源安置点', 'error');
+    return;
+  }
+  
+  const specId = document.getElementById('move-spec-select').value;
+  const toShelterId = document.getElementById('move-to-shelter-select').value;
+  const qty = parseInt(document.getElementById('move-qty').value) || 0;
+  
+  const result = store.moveTents(fromShelterId, toShelterId, specId, qty);
+  
+  if (result.success) {
+    closeModal();
+    showToast(`移动适配成功! 记录ID: ${result.allocationId}`, 'success');
+  } else {
+    let errorMsg = result.error;
+    if (result.suggestions && result.suggestions.length > 0) {
+      errorMsg += '\n建议:\n' + result.suggestions.map(s => s.message).join('\n');
+    }
+    showToast(errorMsg, 'error');
+  }
 }
 
 function openPreemptModal() {

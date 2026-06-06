@@ -64,24 +64,114 @@ function runTests() {
   console.log('📋 测试3: 容量不足时显示超出人数和建议拆分方案');
   console.log('-'.repeat(40));
   
-  const shelterWithGap = testStore.shelters.find(s => testStore.getShelterGap(s.id) > 0);
-  assert(shelterWithGap !== undefined, '找到有缺口的安置点');
+  const shelterWithBigGap = testStore.shelters.find(s => testStore.getShelterGap(s.id) > 100);
+  assert(shelterWithBigGap !== undefined, '找到有较大缺口的安置点');
   
-  if (shelterWithGap) {
+  if (shelterWithBigGap) {
     const spec = testStore.specs[0];
-    const qtyToCauseOverflow = Math.ceil(shelterWithGap.currentPopulation / spec.capacity) + 100;
+    const gap = testStore.getShelterGap(shelterWithBigGap.id);
+    const qtyToCauseOverflow = Math.max(1, Math.floor((gap - 10) / spec.capacity));
     
-    const capacityCheck = testStore.checkCapacityOverflow(shelterWithGap.id, { [spec.id]: qtyToCauseOverflow });
-    assert(capacityCheck.canFit === false, '应检测到容量不足');
+    const capacityCheck = testStore.checkCapacityOverflow(shelterWithBigGap.id, { [spec.id]: qtyToCauseOverflow });
+    assert(capacityCheck.canFit === false, '应检测到容量不足（分配量不足以填补缺口）');
     assert(capacityCheck.overflow > 0, '应计算出超出人数');
     assert(capacityCheck.suggestion !== null && capacityCheck.suggestion.length > 0, '应提供拆分建议方案');
     
-    console.log(`  ℹ️  安置点: ${shelterWithGap.name}`);
-    console.log(`  ℹ️  超出人数: ${capacityCheck.overflow}人`);
+    console.log(`  ℹ️  安置点: ${shelterWithBigGap.name}`);
+    console.log(`  ℹ️  当前缺口: ${gap}人`);
+    console.log(`  ℹ️  分配帐篷: ${spec.name} × ${qtyToCauseOverflow}顶 (增加 ${qtyToCauseOverflow * spec.capacity}人容量)`);
+    console.log(`  ℹ️  仍超出人数: ${capacityCheck.overflow}人`);
     console.log(`  ℹ️  建议方案数量: ${capacityCheck.suggestion.length}条`);
     capacityCheck.suggestion.forEach(s => {
       console.log(`    - ${s.message}`);
     });
+  }
+  console.log('');
+
+  console.log('📋 测试3.1: 移动适配时容量不足也应触发提示拆分（验证失败分支未失效）');
+  console.log('-'.repeat(40));
+  
+  const fromShelter = testStore.shelters.find(s => Object.keys(s.assignedTents).length > 0);
+  const toShelterOverflow = testStore.shelters.find(s => s.id !== fromShelter?.id && testStore.getShelterGap(s.id) > 200);
+  assert(fromShelter !== undefined, '找到有帐篷的源安置点');
+  assert(toShelterOverflow !== undefined, '找到有较大缺口的目标安置点');
+  
+  if (fromShelter && toShelterOverflow) {
+    const firstSpecId = Object.keys(fromShelter.assignedTents)[0];
+    const specForMove = testStore.getSpec(firstSpecId);
+    const toGap = testStore.getShelterGap(toShelterOverflow.id);
+    const qtyForMove = Math.max(1, Math.min(fromShelter.assignedTents[firstSpecId], Math.floor((toGap - 50) / specForMove.capacity)));
+    
+    const moveResult = testStore.moveTents(fromShelter.id, toShelterOverflow.id, firstSpecId, qtyForMove);
+    assert(moveResult.success === false, '移动适配时容量不足应返回失败（移入量不足以填补缺口）');
+    assert(moveResult.error.includes('容量不足'), '错误信息应包含容量不足提示');
+    assert(moveResult.suggestions !== undefined && moveResult.suggestions.length > 0, '移动适配失败时应提供拆分建议方案');
+    
+    console.log(`  ℹ️  源安置点: ${fromShelter.name}`);
+    console.log(`  ℹ️  目标安置点: ${toShelterOverflow.name} (缺口: ${toGap}人)`);
+    console.log(`  ℹ️  移动帐篷: ${specForMove.name} × ${qtyForMove}顶 (增加 ${qtyForMove * specForMove.capacity}人容量)`);
+    console.log(`  ℹ️  失败原因: ${moveResult.error.substring(0, 100)}...`);
+    console.log(`  ℹ️  拆分建议数量: ${moveResult.suggestions.length}条`);
+    moveResult.suggestions.forEach(s => {
+      console.log(`    - ${s.message}`);
+    });
+  }
+  console.log('');
+
+  console.log('📋 测试3.2: 验证移动适配成功时记录同步到历史记录');
+  console.log('-'.repeat(40));
+  
+  let successMoveTestDone = false;
+  
+  for (const fromShelter of testStore.shelters) {
+    if (successMoveTestDone) break;
+    
+    const hasEnoughTents = Object.values(fromShelter.assignedTents).some(qty => qty >= 3);
+    if (!hasEnoughTents) continue;
+    
+    for (const toShelter of testStore.shelters) {
+      if (fromShelter.id === toShelter.id) continue;
+      
+      const specId = Object.keys(fromShelter.assignedTents).find(id => fromShelter.assignedTents[id] >= 3);
+      if (!specId) continue;
+      
+      const spec = testStore.getSpec(specId);
+      const moveQty = 1;
+      const newGap = testStore.calculateShelterGapWithNewAllocation(toShelter.id, { [specId]: moveQty });
+      
+      if (newGap >= 0) {
+        const beforeAllocCount = testStore.allocations.length;
+        const beforeFromQty = fromShelter.assignedTents[specId];
+        const beforeToQty = toShelter.assignedTents[specId] || 0;
+        
+        const successMoveResult = testStore.moveTents(fromShelter.id, toShelter.id, specId, moveQty);
+        assert(successMoveResult.success === true, '正常移动适配应成功');
+        assert(successMoveResult.allocationId !== undefined, '成功移动适配应返回分配记录ID');
+        
+        const afterAllocCount = testStore.allocations.length;
+        assert(afterAllocCount === beforeAllocCount + 1, '移动适配成功后分配历史记录应增加1条');
+        
+        const newAlloc = testStore.allocations.find(a => a.id === successMoveResult.allocationId);
+        assert(newAlloc !== undefined, '应能在历史记录中找到新的移动适配记录');
+        assert(newAlloc.status === 'moved', '新记录状态应为moved');
+        assert(newAlloc.fromShelterId === fromShelter.id, '应记录源安置点ID');
+        assert(newAlloc.moveType === 'internal_adaptation', '应标记为内部适配类型');
+        assert(fromShelter.assignedTents[specId] === beforeFromQty - moveQty, '源安置点帐篷数应减少');
+        assert(toShelter.assignedTents[specId] === beforeToQty + moveQty, '目标安置点帐篷数应增加');
+        
+        console.log(`  ℹ️  移动成功: ${newAlloc.id}`);
+        console.log(`  ℹ️  从 ${fromShelter.name} → ${toShelter.name}`);
+        console.log(`  ℹ️  帐篷: ${spec.name} × ${moveQty}顶`);
+        console.log(`  ℹ️  历史记录数: ${beforeAllocCount} → ${afterAllocCount}`);
+        
+        successMoveTestDone = true;
+        break;
+      }
+    }
+  }
+  
+  if (!successMoveTestDone) {
+    console.log('  ℹ️  跳过: 未找到合适的源/目标安置点组合进行成功移动测试');
   }
   console.log('');
 
